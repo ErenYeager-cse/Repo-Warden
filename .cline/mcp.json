@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "repo-warden": {
+      "command": "node",
+      "args": ["backend/mcp-server.js"],
+      "env": {
+        "KESTRA_API_BASE": "http://localhost:8080/api/v1",
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
