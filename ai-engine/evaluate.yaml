@@ -1,0 +1,13 @@
+model:
+  name: "HuggingFaceH4/zephyr-7b-beta"
+  model_kwargs:
+    load_in_4bit: True
+    device_map: "auto"
+
+tasks:
+  - name: "mmlu"
+    num_samples: 5
+    subset: "computer_security"
+
+evaluation:
+  output_dir: "results"

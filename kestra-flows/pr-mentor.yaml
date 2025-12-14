@@ -1,0 +1,57 @@
+id: pr-mentor
+namespace: company.team
+
+description: |
+  Provides mentoring guidance when CodeRabbit finds issues.
+  Good Cop/Bad Cop dynamic: CodeRabbit points out problems,
+  RepoWarden provides helpful solutions.
+
+tasks:
+  - id: listen-negative-review
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: coderabbit-review
+
+  - id: extract-issue
+    type: io.kestra.plugin.core.script.Bash
+    script: |
+      # Extract the specific issue from CodeRabbit's comment
+      ISSUE=$(echo '{{ trigger.body.review.body }}' | grep -o '🐛.*' | head -1)
+      echo "ISSUE=$ISSUE" >> $KF_OUTPUTS_PATH
+
+  - id: generate-mentoring-response
+    type: io.kestra.plugin.core.http.Request
+    uri: "http://host.docker.internal:3001/api/analyze-diff"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "diff": "CodeRabbit found: {{ outputs.extract-issue.vars.ISSUE }}\n\nProvide mentoring guidance for this issue."
+      }
+
+  - id: post-mentoring-comment
+    type: io.kestra.plugin.github.issues.Comments
+    repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+    number: "{{ trigger.body.pull_request.number }}"
+    body: |
+      🤖 **RepoWarden Mentor Here!**
+
+      CodeRabbit spotted an issue, but don't worry! Here's how to fix it:
+
+      {{ jq outputs.generate-mentoring-response.body.analysis | . }}
+
+      💡 **Pro Tip:** This is a common pattern. Next time, remember to...
+
+      Keep up the great work! 🚀
+    token: "{{ secrets.GITHUB_TOKEN }}"
+
+triggers:
+  - id: coderabbit-review
+    type: io.kestra.plugin.core.trigger.Webhook
+    conditions:
+      - type: io.kestra.plugin.core.condition.Expression
+        expression: |
+          {{ trigger.body.action == 'submitted' and
+             trigger.body.review.user.login == 'coderabbitai[bot]' and
+             (trigger.body.review.state == 'changes_requested' or
+              jq trigger.body.review.body | contains('🐛') or contains('❌')) }}

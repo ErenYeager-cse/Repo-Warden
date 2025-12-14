@@ -1,0 +1,58 @@
+id: coderabbit-ranker
+namespace: company.team
+
+description: |
+  Automatically ranks PRs based on CodeRabbit AI bot comments.
+  Labels critical/security issues as high priority.
+
+tasks:
+  - id: listen-coderabbit
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: coderabbit-webhook
+
+  - id: parse-comment
+    type: io.kestra.plugin.core.http.Request
+    uri: "{{ trigger.body.comment.html_url }}"
+    method: GET
+    headers:
+      Authorization: "token {{ secrets.GITHUB_TOKEN }}"
+      Accept: "application/vnd.github.v3+json"
+
+  - id: check-security-critical
+    type: io.kestra.plugin.core.condition.If
+    condition: "{{ jq trigger.body.comment.body | contains('🚨 Critical') or contains('Security') }}"
+    then:
+      - id: label-critical
+        type: io.kestra.plugin.github.pulls.Labels
+        repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+        number: "{{ trigger.body.issue.number }}"
+        labels:
+          - "🔴 Critical"
+        token: "{{ secrets.GITHUB_TOKEN }}"
+
+  - id: check-high-priority
+    type: io.kestra.plugin.core.condition.If
+    condition: "{{ jq trigger.body.comment.body | contains('High') or contains('Important') }}"
+    then:
+      - id: label-high
+        type: io.kestra.plugin.github.pulls.Labels
+        repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+        number: "{{ trigger.body.issue.number }}"
+        labels:
+          - "🟡 High"
+        token: "{{ secrets.GITHUB_TOKEN }}"
+
+  - id: default-low
+    type: io.kestra.plugin.github.pulls.Labels
+    repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+    number: "{{ trigger.body.issue.number }}"
+    labels:
+      - "🟢 Low"
+    token: "{{ secrets.GITHUB_TOKEN }}"
+
+triggers:
+  - id: coderabbit-webhook
+    type: io.kestra.plugin.core.trigger.Webhook
+    conditions:
+      - type: io.kestra.plugin.core.condition.Expression
+        expression: "{{ trigger.body.action == 'created' and trigger.body.comment.user.login == 'coderabbitai[bot]' }}"

@@ -1,0 +1,98 @@
+id: doc-sync
+namespace: company.team
+
+description: |
+  Automatically updates documentation when PRs are merged.
+  Analyzes code changes and creates/updates README with AI-generated docs.
+
+tasks:
+  - id: listen-pr-merge
+    type: io.kestra.plugin.core.trigger.Webhook
+    key: pr-merged
+
+  - id: get-pr-details
+    type: io.kestra.plugin.github.pulls.Get
+    repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+    number: "{{ trigger.body.pull_request.number }}"
+    token: "{{ secrets.GITHUB_TOKEN }}"
+
+  - id: get-diff
+    type: io.kestra.plugin.core.http.Request
+    uri: "{{ trigger.body.pull_request.diff_url }}"
+    method: GET
+    headers:
+      Authorization: "token {{ secrets.GITHUB_TOKEN }}"
+      Accept: "application/vnd.github.v3.diff"
+
+  - id: analyze-diff
+    type: io.kestra.plugin.core.http.Request
+    uri: "http://host.docker.internal:3001/api/analyze-diff"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "diff": "{{ outputs.get-diff.body }}"
+      }
+
+  - id: read-current-readme
+    type: io.kestra.plugin.github.repos.Contents
+    repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+    path: "README.md"
+    token: "{{ secrets.GITHUB_TOKEN }}"
+
+  - id: update-readme
+    type: io.kestra.plugin.core.script.Bash
+    script: |
+      # Create a new branch for the docs update
+      BRANCH_NAME="docs/auto-sync-$(date +%Y%m%d-%H%M%S)"
+
+      # Create new branch
+      git checkout -b $BRANCH_NAME
+
+      # Update README.md with new documentation
+      cat > README.md << 'EOF'
+      {{ outputs.read-current-readme.content }}
+
+      ---
+
+      ## 📋 Recent Updates (Auto-Generated)
+
+      **{{ trigger.body.pull_request.title }}**
+      *Merged on: {{ trigger.body.pull_request.merged_at }}*
+
+      {{ jq outputs.analyze-diff.body.analysis | . }}
+
+      ---
+      EOF
+
+      # Commit and push
+      git add README.md
+      git commit -m "docs: Auto-sync documentation for {{ trigger.body.pull_request.title }}"
+      git push origin $BRANCH_NAME
+
+  - id: create-pr
+    type: io.kestra.plugin.github.pulls.Create
+    repository: "{{ jq trigger.body.repository.full_name | split('/')[1] }}"
+    head: "{{ outputs.update-readme.stdout | grep 'origin' | awk '{print $3}' }}"
+    base: "main"
+    title: "docs: Auto-sync documentation"
+    body: |
+      🤖 **Documentation Auto-Sync**
+
+      This PR was automatically created by RepoWarden to keep documentation up-to-date.
+
+      **Changes:**
+      - Analyzed merged PR #{{ trigger.body.pull_request.number }}
+      - Generated documentation updates using AI
+      - Updated README.md with new features/changes
+
+      **Original PR:** {{ trigger.body.pull_request.html_url }}
+    token: "{{ secrets.GITHUB_TOKEN }}"
+
+triggers:
+  - id: pr-merged
+    type: io.kestra.plugin.core.trigger.Webhook
+    conditions:
+      - type: io.kestra.plugin.core.condition.Expression
+        expression: "{{ trigger.body.action == 'closed' and trigger.body.pull_request.merged == true }}"
